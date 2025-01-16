@@ -263,13 +263,33 @@ def add_rogue_data(random_seed, orders):
     rogue_orders = rogue_orders.withColumn("product_category", fun.when(fun.rand(random_seed+6) < 0.33, fun.lit("")).otherwise(fun.col("product_category")))
     rogue_orders = rogue_orders.withColumn("payment_type", fun.when(fun.rand(random_seed+7) < 0.33, fun.lit("")).otherwise(fun.col("payment_type")))
     return rogue_orders.union(other_orders)
+
+
+
+# Creates temporary month table to adjust the price for even months
+def add_seasonal_trend(orders):
     
+    orders = orders.withColumn("month", fun.month("datetime"))
+    orders = orders.withColumn(
+        "price",
+        fun.when(fun.col("month").isin(2,4,6,8,10,12),fun.col("price") * 0.75)
+        .otherwise(fun.col("price"))
+    )
+
+
+    orders = orders.drop("month")
+
+
+    return orders
+
+
 random_seed = 1
 date_start = datetime.datetime(2022, 1, 1)
 date_end = datetime.datetime(2024, 12, 31)
 orders = generate_final_data(random_seed, date_start, date_end)
 #orders = add_rogue_data(random_seed, orders)
 orders = orders.orderBy("order_id")
+orders = add_seasonal_trend(orders)
 orders.show()
 print(orders.count())
 
