@@ -276,10 +276,9 @@ def add_seasonal_trend(orders):
     orders = orders.withColumn("month", fun.month("datetime"))
     orders = orders.withColumn(
         "price",
-        fun.when(fun.col("month").isin(1,3,5,7,9,11),fun.col("price") * 0.75)
+        fun.when(fun.col("month").isin(10,11,12),fun.col("price") * 0.75)
         .otherwise(fun.col("price"))
     )
-
 
     orders = orders.drop("month")
 
@@ -291,10 +290,9 @@ random_seed = 1
 date_start = datetime.datetime(2022, 1, 1)
 date_end = datetime.datetime(2024, 12, 31)
 orders = generate_final_data(random_seed, date_start, date_end)
-#orders = add_rogue_data(random_seed, orders)
+orders = add_rogue_data(random_seed, orders)
 orders = orders.orderBy("order_id")
-
-# orders = add_seasonal_trend(orders)
+orders = add_seasonal_trend(orders)
 orders.show()
 print(orders.count())
 
