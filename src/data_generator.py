@@ -10,6 +10,7 @@ from pyspark.sql.types import StringType
 
 spark = SparkSession.builder.appName("data_generator").getOrCreate()
 
+# Takes the breadcrumb column and maps it to a category and generates the products dataframe
 def generate_products():
     products = spark.read.option("header", "true") \
                             .option("multiLine", "true") \
@@ -41,7 +42,7 @@ def generate_products():
         "reptiles": ["reptile", "reptiles"],
     }
 
-    # Define the category mapping function
+    # Function to map category
     def map_category(breadcrumb):
         if not breadcrumb:
             return "other"
@@ -52,10 +53,8 @@ def generate_products():
                 return category
         return "other"
     
-    # Register the UDF
     map_category_udf = fun.udf(map_category, StringType())
     
-    # Apply the mapping
     products = products.withColumn(
         "product_category",
         map_category_udf(fun.col("product_category"))
@@ -63,7 +62,8 @@ def generate_products():
     
     return products
 
-#Locations
+#Locations, 1500 US cities, 100 Canadian cities from cities with postal codes L, M, K, N (Southern Ontario)
+#Caches US cities, Canada cities to increase performance
 def generate_locations():       
     # US Cities
     locations = spark.read.csv("uscities.csv", header=True, inferSchema=True)
@@ -74,7 +74,6 @@ def generate_locations():
     ).orderBy("population", ascending=False).limit(1500)
     us_cities = us_cities.withColumn("country", fun.lit("USA"))
     
-    # Cache US cities
     us_cities = us_cities.cache()
     us_cities.count()
     
@@ -86,22 +85,18 @@ def generate_locations():
         fun.col("city_ascii").alias("city"),
         fun.col("timezone"),
         fun.col("population").cast("integer").alias("population")
-    ).orderBy("population", ascending=False).limit(999)
+    ).orderBy("population", ascending=False).limit(100)
+
     canada_cities = canada_cities.withColumn("country", fun.lit("Canada"))
     
-    # Cache Canada cities
     canada_cities = canada_cities.cache()
     canada_cities.count()
     
-    # Repartition before union
     us_cities = us_cities.repartition(10)
     canada_cities = canada_cities.repartition(10)
     
-    # Perform union and final operations
     combined = us_cities.unionByName(canada_cities)
     result = combined.orderBy("population", ascending=False)
-    
-    # Clean up cache
     us_cities.unpersist()
     canada_cities.unpersist()
     
@@ -113,45 +108,43 @@ def names_df():
     users = users.withColumnRenamed("_c0", "customer_name")
     return users
 
-#Takes dataframe for names and locations. Generates a dataframe of random 3000 users with a random location
+#Takes dataframe for names and locations. Generates a dataframe of random 4000 users with a random location
 #additional data points: user_id(unique identifier)
 def generate_users(random_seed, locations, names):
     random_seed += 5
-    # First create base users with IDs
-    sampled_names = names.sample(withReplacement=False, fraction=3000/names.count(), seed=random_seed)
-    sampled_names = sampled_names.limit(3000)
+    sampled_names = names.sample(withReplacement=False, fraction=4000/names.count(), seed=random_seed)
+    sampled_names = sampled_names.limit(4000)
 
     locations = locations.withColumn("location_index", fun.monotonically_increasing_id()).orderBy("city")
 
     possible_locations = locations.select("location_index", "city", "country")
 
-    sampled_names = sampled_names.withColumn("location_index", fun.floor(fun.rand(random_seed) * possible_locations.count()))
+    sampled_names = sampled_names.withColumn("location_index", fun.floor(fun.rand(random_seed+1) * possible_locations.count()))
     sampled_names = sampled_names.join(possible_locations, sampled_names.location_index == possible_locations.location_index, "left")
     sampled_names = sampled_names.select("customer_name", "city", "country")
 
     sampled_names = sampled_names.withColumn("customer_id", fun.monotonically_increasing_id())
     return sampled_names
 
-#assigns the additional data points to the users_products dataframe
+#assigns the order related data points to the users_products dataframe
 def generate_order(random_seed, users_products, date_start, date_end):
-    random_seed += 3
+    random_seed += 30
     orders = users_products
     start = date_start.timestamp()
     end = date_end.timestamp()
     orders = orders.withColumn(
         "datetime",
-        (fun.rand(random_seed) * (end - start) + start).cast("timestamp")
+        (fun.rand(random_seed+1) * (end - start) + start).cast("timestamp")
     )
     
-    random_seed += 1
-    orders = orders.withColumn("qty", fun.floor(fun.rand(random_seed) * 5) + 1)
+    orders = orders.withColumn("qty", fun.floor(fun.rand(random_seed+2) * 5) + 1)
 
     payment_types = ["Card", "Internet Banking", "UPI", "Wallet"]
     orders = orders.withColumn(
         "payment_type",
         fun.element_at(
             fun.array(*[fun.lit(pt) for pt in payment_types]),
-            (fun.rand(random_seed) * len(payment_types) + 1).cast("int")
+            (fun.rand(random_seed+3) * len(payment_types) + 1).cast("int")
         )
     )
     orders = orders.withColumn("ecommerce_website_name", fun.lit("www.chewy.com"))
@@ -161,19 +154,27 @@ def generate_order(random_seed, users_products, date_start, date_end):
     
     return orders
 
-#duplicates each row of users_products 2-5 times, and generates an order for each row. Each should be a couple weeks apart
+#duplicates each row of users_products 4 times, and generates an order for each row. Each should be a couple weeks apart
 #For a total of 2000-5000 orders
 def generate_orders_reocurring(random_seed, users, products, date_start, date_end):
-    random_seed += 2
+    random_seed += 20
     product_ids = [row.product_id for row in products.select("product_id").distinct().collect()]
     num_products = len(product_ids)
 
+    category_favorites = ["food", "treats", "health"]
+    product_favorites = [row.product_id for row in products.filter(fun.col("product_category").isin(category_favorites)).select("product_id").distinct().collect()]
+    num_product_favorites = len(product_favorites)
+
+    #assigns a random product to each user, with a 60% chance of being a favorite category
     users = users.withColumn(
         "product_id",
-        fun.element_at(
+        fun.when(fun.rand(random_seed+1) < 0.6, fun.element_at(
+            fun.array(*[fun.lit(pid) for pid in product_favorites]),
+            (fun.rand(random_seed+2) * num_product_favorites + 1).cast("int")
+        )).otherwise(fun.element_at(
             fun.array(*[fun.lit(pid) for pid in product_ids]),
-            (fun.rand(random_seed) * num_products + 1).cast("int")
-        )
+            (fun.rand(random_seed+3) * num_products + 1).cast("int")
+        ))
     )
     
     users = users.join(
@@ -197,18 +198,16 @@ def generate_orders_reocurring(random_seed, users, products, date_start, date_en
 #For a total of about 10000 orders
 def generate_orders_one_time(random_seed, users, products, date_start, date_end):
     random_seed += 1
-    users = users.sample(withReplacement=True, fraction=10000/users.count(), seed=random_seed)
+    users = users.sample(withReplacement=True, fraction=10000/users.count(), seed=random_seed+1)
     
-    # Create an array of product IDs and get their count
     product_ids = [row.product_id for row in products.select("product_id").distinct().collect()]
     num_products = len(product_ids)
     
-    # Use rand() to generate a random index and element_at to select the product_id
     users = users.withColumn(
         "product_id",
         fun.element_at(
             fun.array(*[fun.lit(pid) for pid in product_ids]),
-            (fun.rand(random_seed) * num_products + 1).cast("int")
+            (fun.rand(random_seed+2) * num_products + 1).cast("int")
         )
     )
 
@@ -225,7 +224,7 @@ def generate_orders_one_time(random_seed, users, products, date_start, date_end)
 #additional data points: order_id (unique identifier), order_date (random date between date_start and date_end), qty (random integer between 1 and 5), 
 #payment_type (randomly selected from "Card", "Internet Banking", "UPI", "Wallet"), website_name (default www.chewy.com), 
 #payment_transaction_id (unique identifier), payment_success (Y/N default Y), failure_reason (default null)
-#returns a dataframe of 10k-20k orders
+#returns a dataframe of 10k-15k orders
 def generate_final_data(random_seed, date_start : datetime.datetime, date_end : datetime.datetime):
     products = generate_products()
     print("Products generated")
@@ -251,14 +250,30 @@ def generate_final_data(random_seed, date_start : datetime.datetime, date_end : 
     all_columns = ["order_id"] + [col for col in orders.columns if col != "order_id"]
     orders = orders.select(*all_columns)
     return orders
+
+#Selects up to 5% of the orders to convert to rogue data
+#Either replaces the country with all lowercase letters, removes the category, removes payment_type, or replaces qty with a higher than normal number
+def add_rogue_data(random_seed, orders):
+    random_seed += 10
+    rogue_orders = orders.sample(withReplacement=False, fraction=0.05, seed=random_seed)
+    other_orders = orders.subtract(rogue_orders)
+
+    rogue_orders = rogue_orders.withColumn("country", fun.when(fun.rand(random_seed+1) < 0.33, fun.lower(fun.col("country"))).otherwise(fun.col("country")))
+    rogue_orders = rogue_orders.withColumn("qty", fun.when(fun.rand(random_seed+3) < 0.33, (fun.rand(random_seed+5) * 100).cast("int")).otherwise(fun.col("qty")))
+    rogue_orders = rogue_orders.withColumn("product_category", fun.when(fun.rand(random_seed+6) < 0.33, fun.lit("")).otherwise(fun.col("product_category")))
+    rogue_orders = rogue_orders.withColumn("payment_type", fun.when(fun.rand(random_seed+7) < 0.33, fun.lit("")).otherwise(fun.col("payment_type")))
+    return rogue_orders.union(other_orders)
     
 random_seed = 1
 date_start = datetime.datetime(2022, 1, 1)
 date_end = datetime.datetime(2024, 12, 31)
 orders = generate_final_data(random_seed, date_start, date_end)
+#orders = add_rogue_data(random_seed, orders)
+orders = orders.orderBy("order_id")
 orders.show()
+print(orders.count())
 
-#output to csv in one file
+#output to csv
 orders.coalesce(1).write.csv("orders.csv", header=True, mode="overwrite")
 print("Outputed to orders.csv")
 
