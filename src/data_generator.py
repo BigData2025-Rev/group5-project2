@@ -69,9 +69,8 @@ def generate_locations():
     locations = spark.read.csv("uscities.csv", header=True, inferSchema=True)
     us_cities = locations.select(
         fun.col("city_ascii").alias("city"),
-        fun.col("timezone"),
         fun.col("population").cast("integer").alias("population")
-    ).orderBy("population", ascending=False).limit(1500)
+    ).orderBy("population", ascending=False).limit(1400)
     us_cities = us_cities.withColumn("country", fun.lit("USA"))
     
     us_cities = us_cities.cache()
@@ -83,22 +82,38 @@ def generate_locations():
         (fun.substring("postal", 1, 1).isin(['L', 'M', 'K', 'N']))
     ).select(
         fun.col("city_ascii").alias("city"),
-        fun.col("timezone"),
         fun.col("population").cast("integer").alias("population")
     ).orderBy("population", ascending=False).limit(100)
 
-    canada_cities = canada_cities.withColumn("country", fun.lit("Canada"))
-    
     canada_cities = canada_cities.cache()
     canada_cities.count()
+
+    #Other countries, only take cities with country as "australia", "united kingdom", and "mexico"
+    other_countries = spark.read.csv("worldcities.csv", header=True, inferSchema=True)
+    other_countries = other_countries.filter(
+        (fun.col("country").isin(["Australia", "United Kingdom", "Mexico"]))
+    ).select(
+        fun.col("city_ascii").alias("city"),
+        fun.col("population").cast("integer").alias("population"),
+        fun.col("country")
+    ).orderBy("population", ascending=False).limit(200)
+
+    canada_cities = canada_cities.withColumn("country", fun.lit("Canada"))
+    
+    other_countries = other_countries.cache()
+    other_countries.count()
+    other_countries.show()
     
     us_cities = us_cities.repartition(10)
     canada_cities = canada_cities.repartition(10)
+    other_countries = other_countries.repartition(10)
     
     combined = us_cities.unionByName(canada_cities)
+    combined = combined.unionByName(other_countries)
     result = combined.orderBy("population", ascending=False)
     us_cities.unpersist()
     canada_cities.unpersist()
+    other_countries.unpersist()
     
     return result
 
