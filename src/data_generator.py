@@ -102,7 +102,6 @@ def generate_locations():
     
     other_countries = other_countries.cache()
     other_countries.count()
-    other_countries.show()
     
     us_cities = us_cities.repartition(10)
     canada_cities = canada_cities.repartition(10)
