@@ -164,8 +164,13 @@ def generate_order(random_seed, users_products, date_start, date_end):
     )
     orders = orders.withColumn("ecommerce_website_name", fun.lit("www.chewy.com"))
     orders = orders.withColumn("payment_txn_id", fun.monotonically_increasing_id())
-    orders = orders.withColumn("payment_txn_success", fun.lit("Y"))
-    orders = orders.withColumn("failure_reason", fun.lit(""))
+
+    failure_reasons = ["Insufficient Funds", "Invalid Payment Details","Transaction Timedout"]
+    orders = orders.withColumn("payment_txn_success", fun.when(fun.rand()>0.2, fun.lit("Y")).otherwise(fun.lit("N")))
+    orders = orders.withColumn("failure_reason", fun.when(fun.col("payment_txn_success")=="N",
+                                                          fun.element_at(fun.array(*[fun.lit(reason) for reason in failure_reasons]),
+                                                                         (fun.rand()*len(failure_reasons)+1).cast("int"))
+                                                                         ).otherwise(fun.lit("")))
     
     return orders
 
