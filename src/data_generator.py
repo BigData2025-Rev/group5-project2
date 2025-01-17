@@ -21,7 +21,6 @@ def generate_products():
     products = products.withColumnRenamed("sku", "product_id").withColumnRenamed("name", "product_name").withColumnRenamed("breadcrumb", "product_category")
     
     category_mapping = {
-        "feeders": ["feeder", "feeders"],
         "food": ["food", "feed"],
         "treats": ["treats"],
         "toys": ["toys", "games"],
@@ -31,7 +30,7 @@ def generate_products():
         "scratchers": ["scratchers"],
         "cages & enclosures": ["cages", "enclosures", "habitat", "crates"],
         "grooming": ["grooming"],
-        "bowls & feeding": ["bowls", "feeding"],
+        "bowls & feeding": ["bowls", "feeding", "feeder", "feeders"],
         "heaters & thermometers": ["heaters", "thermometers"],
         "collars & harnesses": ["collars", "harnesses"],
         "gift": ["gift", "gifts"],
@@ -60,7 +59,6 @@ def generate_products():
         "product_category",
         map_category_udf(fun.col("product_category"))
     )
-    
     return products
 
 #Locations, 1500 US cities, 100 Canadian cities from cities with postal codes L, M, K, N (Southern Ontario)
@@ -196,18 +194,16 @@ def generate_order(random_seed, users_products, date_start, date_end):
     orders = orders.withColumn("payment_txn_id", fun.monotonically_increasing_id())
 
     failure_reasons = ["Insufficient Funds", "Invalid Payment Details","Transaction Timedout"]
-    orders = orders.withColumn("payment_txn_success", fun.when(fun.rand()>0.2, fun.lit("Y")).otherwise(fun.lit("N")))
+    orders = orders.withColumn("payment_txn_success", fun.when(fun.rand(random_seed+4)>0.2, fun.lit("Y")).otherwise(fun.lit("N")))
     orders = orders.withColumn("failure_reason", fun.when(fun.col("payment_txn_success")=="N",
                                                           fun.element_at(fun.array(*[fun.lit(reason) for reason in failure_reasons]),
-                                                                         (fun.rand()*len(failure_reasons)+1).cast("int"))
+                                                                         (fun.rand(random_seed+5)*len(failure_reasons)+1).cast("int"))
                                                                          ).otherwise(fun.lit("")))
     
     return orders
 
-#duplicates each row of users_products 4 times, and generates an order for each row. Each should be a couple weeks apart
-#For a total of 2000-5000 orders
-def generate_orders_reocurring(random_seed, users, products, date_start, date_end):
-    random_seed += 20
+def assign_product(random_seed, users, products):
+    random_seed += 10
     product_ids = [row.product_id for row in products.select("product_id").distinct().collect()]
     num_products = len(product_ids)
 
@@ -215,49 +211,45 @@ def generate_orders_reocurring(random_seed, users, products, date_start, date_en
     product_favorites = [row.product_id for row in products.filter(fun.col("product_category").isin(category_favorites)).select("product_id").distinct().collect()]
     num_product_favorites = len(product_favorites)
 
-    #assigns a random product to each user, with a 60% chance of being a favorite category
-    users = users.withColumn(
-        "product_id",
-        fun.when(fun.rand(random_seed+1) < 0.6, fun.element_at(
-            fun.array(*[fun.lit(pid) for pid in product_favorites]),
-            (fun.rand(random_seed+2) * num_product_favorites + 1).cast("int")
-        )).otherwise(fun.element_at(
-            fun.array(*[fun.lit(pid) for pid in product_ids]),
-            (fun.rand(random_seed+3) * num_products + 1).cast("int")
-        ))
-    )
-    
-    users = users.join(
-        products.select("product_id", "product_name", "product_category", "price"),
-        "product_id",
-        "left"
-    )
-        
-    base_orders = generate_order(random_seed, users, date_start, date_end)
-    final_orders = base_orders
-    for i in range(4):
-        additional_orders = base_orders.withColumn("datetime", fun.expr(f"datetime + INTERVAL {(i + 1) * 14} DAYS"))
-        additional_orders = additional_orders.withColumn("payment_txn_id", fun.monotonically_increasing_id())
-        final_orders = final_orders.union(additional_orders)
-    
-    final_orders = final_orders.orderBy("customer_id")
-    return final_orders
+    canada_favorites = ["gift", "toys", "accessories"]
+    canada_product_favorites = [row.product_id for row in products.filter(fun.col("product_category").isin(canada_favorites)).select("product_id").distinct().collect()]
+    num_canada_product_favorites = len(canada_product_favorites)
 
-#assigns each user a random product and generates an order for each user
-#any time between date_start and date_end
-#For a total of about 10000 orders
-def generate_orders_one_time(random_seed, users, products, date_start, date_end):
-    random_seed += 1
-    users = users.sample(withReplacement=True, fraction=10000/users.count(), seed=random_seed+1)
-    
-    product_ids = [row.product_id for row in products.select("product_id").distinct().collect()]
-    num_products = len(product_ids)
-    
+    mexico_favorites = ["grooming", "fish", "treats"]
+    mexico_product_favorites = [row.product_id for row in products.filter(fun.col("product_category").isin(mexico_favorites)).select("product_id").distinct().collect()]
+    num_mexico_product_favorites = len(mexico_product_favorites)
+
+    #if the user is in canada, there is a 60% chance of being a canada favorite
+    #if the user is in mexico, there is a 60% chance of being a mexico favorite
+    #otherwise, there is a 25% chance of being a product favorite
     users = users.withColumn(
-        "product_id",
-        fun.element_at(
-            fun.array(*[fun.lit(pid) for pid in product_ids]),
-            (fun.rand(random_seed+2) * num_products + 1).cast("int")
+         "product_id",
+        fun.when(
+            (fun.col("country") == "Canada") & (fun.rand(random_seed + 1) < 0.6),
+            fun.element_at(
+                fun.array(*[fun.lit(pid) for pid in canada_product_favorites]),
+                (fun.rand(random_seed + 2) * num_canada_product_favorites + 1).cast("int"),
+            ),
+        )
+        .when(
+            (fun.col("country") == "Mexico") & (fun.rand(random_seed + 1) < 0.6),
+            fun.element_at(
+                fun.array(*[fun.lit(pid) for pid in mexico_product_favorites]),
+                (fun.rand(random_seed + 2) * num_mexico_product_favorites + 1).cast("int"),
+            ),
+        )
+        .when(
+            fun.rand(random_seed + 1) < 0.25,
+            fun.element_at(
+                fun.array(*[fun.lit(pid) for pid in product_favorites]),
+                (fun.rand(random_seed + 2) * num_product_favorites + 1).cast("int"),
+            ),
+        )
+        .otherwise(
+            fun.element_at(
+                fun.array(*[fun.lit(pid) for pid in product_ids]),
+                (fun.rand(random_seed + 3) * num_products + 1).cast("int"),
+            ),
         )
     )
 
@@ -266,6 +258,32 @@ def generate_orders_one_time(random_seed, users, products, date_start, date_end)
         "product_id",
         "left"
     )
+    return users
+
+#duplicates each row of users_products 4 times, and generates an order for each row. Each should be a couple weeks apart
+#For a total of 2000-5000 orders
+def generate_orders_reocurring(random_seed, users, products, date_start, date_end):
+    random_seed += 20
+    users = assign_product(random_seed, users, products)
+
+    base_orders = generate_order(random_seed, users, date_start, date_end)
+    final_orders = base_orders
+    for i in range(4):
+        additional_orders = base_orders.withColumn("datetime", fun.expr(f"datetime + INTERVAL {(i + 1) * 14} DAYS"))
+        additional_orders = additional_orders.withColumn("payment_txn_id", fun.monotonically_increasing_id())
+        final_orders = final_orders.union(additional_orders)
+    
+    final_orders = final_orders.orderBy("customer_id")
+    final_orders = final_orders.filter(fun.col("datetime") <= date_end)
+    return final_orders
+
+#assigns each user a random product and generates an order for each user
+#any time between date_start and date_end
+#For a total of about 10000 orders
+def generate_orders_one_time(random_seed, users, products, date_start, date_end):
+    random_seed += 1
+    users = users.sample(withReplacement=True, fraction=10000/users.count(), seed=random_seed+1)
+    users = assign_product(random_seed, users, products)
     
     orders = generate_order(random_seed, users, date_start, date_end)
     return orders
@@ -285,8 +303,8 @@ def generate_final_data(random_seed, date_start : datetime.datetime, date_end : 
     users = generate_users(random_seed, locations, names)
     print("Users generated")
 
-    reocurring_users = users.sample(withReplacement=False, fraction=0.2, seed=random_seed)
-    one_time_users = users.subtract(reocurring_users)
+    reocurring_users = users.sample(withReplacement=False, fraction=0.2, seed=random_seed+1)
+    one_time_users = users
 
     reocurring_orders = generate_orders_reocurring(random_seed, reocurring_users, products, date_start, date_end)
 
