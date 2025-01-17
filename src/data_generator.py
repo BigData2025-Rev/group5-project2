@@ -183,13 +183,18 @@ def generate_order(random_seed, users_products, date_start, date_end):
     orders = orders.withColumn("qty", fun.floor(fun.rand(random_seed+2) * 5) + 1)
 
     payment_types = ["Card", "Internet Banking", "UPI", "Wallet"]
-    orders = orders.withColumn(
-        "payment_type",
-        fun.element_at(
-            fun.array(*[fun.lit(pt) for pt in payment_types]),
-            (fun.rand(random_seed+3) * len(payment_types) + 1).cast("int")
-        )
-    )
+    
+    # weighted the payment type
+    weights = [0.4,0.1,0.4,0.1]
+
+    @fun.udf(StringType())
+    def weighted_payment():
+        return random.choices(payment_types, weights)[0]
+
+    orders = orders.withColumn("payment_type", weighted_payment())
+
+
+
     orders = orders.withColumn("ecommerce_website_name", fun.lit("www.chewy.com"))
     orders = orders.withColumn("payment_txn_id", fun.monotonically_increasing_id())
 
