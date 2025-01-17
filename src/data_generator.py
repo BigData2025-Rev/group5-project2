@@ -7,6 +7,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as fun
 from pyspark.sql.window import Window
 from pyspark.sql.types import StringType
+from pyspark.sql.types import DoubleType
 
 spark = SparkSession.builder.appName("data_generator").getOrCreate()
 
@@ -298,6 +299,9 @@ def generate_final_data(random_seed, date_start : datetime.datetime, date_end : 
 
     all_columns = ["order_id"] + [col for col in orders.columns if col != "order_id"]
     orders = orders.select(*all_columns)
+
+    orders = orders.withColumn("price", fun.regexp_replace(orders["price"], r"[^0-9.]", ""))
+    orders = orders.withColumn("price", orders["price"].cast(DoubleType()))
     return orders
 
 #Selects up to 5% of the orders to convert to rogue data
@@ -312,13 +316,32 @@ def add_rogue_data(random_seed, orders):
     rogue_orders = rogue_orders.withColumn("product_category", fun.when(fun.rand(random_seed+6) < 0.33, fun.lit("")).otherwise(fun.col("product_category")))
     rogue_orders = rogue_orders.withColumn("payment_type", fun.when(fun.rand(random_seed+7) < 0.33, fun.lit("")).otherwise(fun.col("payment_type")))
     return rogue_orders.union(other_orders)
+
+
+
+# Creates temporary month table to adjust the price for even months
+def add_seasonal_trend(orders):
     
+    orders = orders.withColumn("month", fun.month("datetime"))
+    orders = orders.withColumn(
+        "price",
+        fun.when(fun.col("month").isin(10,11,12),fun.col("price") * 0.75)
+        .otherwise(fun.col("price"))
+    )
+
+    orders = orders.drop("month")
+
+
+    return orders
+
+
 random_seed = 1
 date_start = datetime.datetime(2022, 1, 1)
 date_end = datetime.datetime(2024, 12, 31)
 orders = generate_final_data(random_seed, date_start, date_end)
-#orders = add_rogue_data(random_seed, orders)
+orders = add_rogue_data(random_seed, orders)
 orders = orders.orderBy("order_id")
+orders = add_seasonal_trend(orders)
 orders.show()
 print(orders.count())
 
