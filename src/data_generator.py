@@ -141,6 +141,35 @@ def generate_users(random_seed, locations, names):
     sampled_names = sampled_names.withColumn("customer_id", fun.monotonically_increasing_id())
     return sampled_names
 
+# Adjusts the time of a given timestamp to simulate sales patterns
+@fun.udf(TimestampType())
+def assign_time_with_trends(timestamp):
+    """
+    Adjusts the time of a given timestamp to simulate sales patterns:
+    - Weekdays (Monday-Friday): Higher probability of sales during evening hours (6 PM - 10 PM)
+    - Weekends (Saturday-Sunday): Sales evenly distributed throughout the day
+    """
+    import random
+    day_of_week = timestamp.weekday()
+    if day_of_week < 5:  # Weekdays (Monday-Friday)
+        # Higher probability for evening hours (6 PM - 10 PM)
+        hour = random.choices(
+            population=[i for i in range(24)],
+            weights=[1]*18 + [5]*4 + [1]*2,  # Increased weight for 6 PM to 10 PM
+            k=1
+        )[0]
+    else:  # Weekends (Saturday-Sunday)
+        # Uniform distribution throughout the day
+        hour = random.choices(
+            population=[i for i in range(24)],
+            weights=[1]*24,
+            k=1
+        )[0]
+
+    minute = random.randint(0, 59)
+    second = random.randint(0, 59)
+    return timestamp.replace(hour=hour, minute=minute, second=second)
+
 #assigns the order related data points to the users_products dataframe
 def generate_order(random_seed, users_products, date_start, date_end):
     random_seed += 30
@@ -152,6 +181,7 @@ def generate_order(random_seed, users_products, date_start, date_end):
         (fun.rand(random_seed+1) * (end - start) + start).cast("timestamp")
     )
     
+    orders = orders.withColumn("datetime", assign_time_with_trends(fun.col("datetime")))
     orders = orders.withColumn("qty", fun.floor(fun.rand(random_seed+2) * 5) + 1)
 
     payment_types = ["Card", "Internet Banking", "UPI", "Wallet"]
