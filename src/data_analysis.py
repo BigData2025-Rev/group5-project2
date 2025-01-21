@@ -31,7 +31,7 @@ def clean_data(data):
     .otherwise(fun.col("product_category")))
 
     data = data.withColumn("failure_reason", fun.when(
-        (fun.col("failure_reason") == "ROGUEROGUE") | (fun.regexp_like(fun.col("failure_reason"), fun.lit("^X{3,}"))) | (fun.regexp_like(fun.col("failure_reason"), fun.lit("^[^a-zA-Z0-9]+$"))) | (fun.col("failure_reason") == ""),
+        (fun.col("failure_reason") == "ROGUEROGUE") | (fun.col("failure_reason") == "") | (fun.col("failure_reason").isNull()) | (fun.regexp_like(fun.col("failure_reason"), fun.lit("^X{3,}"))) | (fun.regexp_like(fun.col("failure_reason"), fun.lit("^[^a-zA-Z0-9]+$"))),
         fun.when(
             fun.col("payment_txn_success") == 1, fun.lit("payment successful")
         )
