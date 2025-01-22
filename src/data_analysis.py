@@ -14,19 +14,19 @@ def load_data():
 def clean_data(data):
     data = data.withColumn("customer_name", fun.when(
         (fun.col("customer_name") == "ROGUEROGUE") | (fun.regexp_like(fun.col("customer_name"), fun.lit("^X{3,}"))) | (fun.regexp_like(fun.col("customer_name"), fun.lit("^[^a-zA-Z0-9]+$"))),
-        fun.lit("")
+        fun.lit(None)
     )
     .otherwise(fun.col("customer_name")))
 
     data = data.withColumn("country", fun.when(
         (fun.col("country") == "ROGUEROGUE") | (fun.regexp_like(fun.col("country"), fun.lit("^X{3,}"))) | (fun.regexp_like(fun.col("country"), fun.lit("^[^a-zA-Z0-9]+$"))),
-        fun.lit("")
+        fun.lit(None)
     )
     .otherwise(fun.col("country")))
 
     data = data.withColumn("product_category", fun.when(
         (fun.col("product_category") == "ROGUEROGUE") | (fun.regexp_like(fun.col("product_category"), fun.lit("^X{3,}"))) | (fun.regexp_like(fun.col("product_category"), fun.lit("^[^a-zA-Z0-9]+$"))),
-        fun.lit("")
+        fun.lit(None)
     )
     .otherwise(fun.col("product_category")))
 
@@ -39,6 +39,9 @@ def clean_data(data):
     )
     .otherwise(fun.col("failure_reason")))
 
+    #drop all rows with a null value in any column
+    data = data.dropna()
+
     return data
 
 
@@ -46,5 +49,5 @@ data = load_data()
 data = clean_data(data)
 
 print(data.show())
-#save cleaned data to csv
+print(data.count())
 data.write.csv("cleaned_data.csv", header=True, mode="overwrite")
